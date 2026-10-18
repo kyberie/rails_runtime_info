@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Optional local check. Requires an already-installed Rack; never installs
+# anything and never boots Rails. Select a version with RACK_VERSION if needed.
+begin
+  gem "rack", ENV["RACK_VERSION"] if ENV["RACK_VERSION"]
+  require "rack"
+  require "rack/lint"
+  require "rack/mock"
+rescue LoadError => error
+  warn "Rack lint not run: #{error.message}. Supply an already-installed compatible Rack."
+  exit 2
+end
+require "json"
+require_relative "../lib/rails_runtime_info"
+
+["GET", "POST", "HEAD"].each do |method|
+  env = Rack::MockRequest.env_for("https://app.internal/_internal/diagnostics?check=yes", :method => method, :input => (method == "POST" ? "probe" : ""))
+  status, headers, body = Rack::Lint.new(RailsRuntimeInfo::Endpoint).call(env)
+  text = String.new
+  begin
+    body.each { |part| text << part }
+  ensure
+    body.close if body.respond_to?(:close)
+  end
+  abort "unexpected status #{status}" unless status == 200
+  if method == "HEAD"
+    abort "HEAD has a body" unless text.empty?
+  else
+    abort "invalid request echo" unless JSON.parse(text)["request"]["metadata"]["REQUEST_METHOD"] == method
+    abort "wrong content length" unless headers["content-length"].to_i == text.bytesize
+  end
+end
+puts "Rack #{Gem.loaded_specs.fetch('rack').version}: GET, POST and HEAD passed Rack::Lint"

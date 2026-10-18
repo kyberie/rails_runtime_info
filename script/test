@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Run without Bundler or a Rails application. This permits use of an already
+# installed Minitest compatible with the Ruby currently executing the tests.
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+$LOAD_PATH.unshift File.expand_path("../test", __dir__)
+Dir[File.expand_path("../test/**/*_test.rb", __dir__)].sort.each { |file| require file }
