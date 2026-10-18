@@ -1,11 +1,11 @@
 # Validation record
 
-## Version 0.2.0 - executed on 2026-10-18
+## Version 0.2.1 - executed on 2026-10-18
 
 Environment: Linux x86_64, MRI Ruby 3.3.8, Minitest 5.20.0, JSON 2.7.2,
 RubyGems 3.6.7 and Bundler 2.5.22. No Rails installation or application was used.
 
-The standalone suite passed with **113 tests, 470 assertions, zero failures,
+The standalone suite passed with **120 tests, 516 assertions, zero failures,
 zero errors and zero skips**. The final suite was run with seeds 24680 and
 43210. Tests require neither Rails nor Rack nor Bundler.
 
@@ -18,14 +18,19 @@ Changes covered by regression tests include:
 - Only activated gems are collected. There is no lockfile parser or inventory;
   a gems-only request succeeds with file opens disabled and a nonexistent
   BUNDLE_GEMFILE.
-- The exact default selection and JSON ordering; signed rules, parent resets,
-  nested inclusions/exclusions, all/none, repeated query parameters, encoded
-  plus/comma/key names, invalid selectors and parser size/depth/rule limits.
+- The exact default selection and JSON ordering; bare and signed rules, parent
+  resets, nested inclusions/exclusions, all/none, repeated query parameters,
+  plain URLs, legacy encoded and literal plus signs, encoded comma/key names,
+  invalid selectors and parser size/depth/rule limits.
 - An independent last-matching-rule reference agrees with the selection tree
-  on 100 deterministic randomized sequences of 16 rules each.
-- Unselected collectors do not run. Disabling request.body leaves its input
-  stream unread; disabling request.rack_environment skips its normalization.
-  Invalid selection returns 400 before collection/body reads.
+  on 100 deterministic randomized sequences of 16 rules each, mixing bare,
+  plus-prefixed and minus-prefixed rules.
+- Unselected collectors do not run. The default excludes request.body and does
+  not invoke its collector, even for cached bodies. Known cached-body entries
+  remain descriptors rather than payloads. Explicit request.body, request and
+  all selections restore bounded capture; a later body exclusion prevents it.
+  Disabling request.rack_environment skips its normalization. Invalid selection
+  returns 400 before collection/body reads.
 - The six-key Action Dispatch allowlist; omitted secret_key_base, legacy
   secret_token, key-generator/rotation data, unknown future keys and
   rack.session.options; recursive aliases/symbol keys; selectors cannot restore
@@ -81,8 +86,9 @@ exercised. No database or external-service checks were performed.
 
 In an authorized test environment, add the documented explicit require and
 route, then make an authenticated request through the actual proxy/application
-stack. Confirm default output, `what` selections (with encoded plus signs),
-request ID visibility, absence of the forbidden framework keys and a normal
+stack. Confirm default output without body capture, plain `what` selections,
+explicit bounded body capture, request ID visibility, absence of the forbidden
+framework keys and a normal
 application request. Verify alternate ingress/backend paths cannot reach the
 endpoint without protection. Confirm proxy body/time limits are appropriate.
 
@@ -92,4 +98,6 @@ compatibility verified. This record is bounded evidence, not a guarantee
 against arbitrary application monkey patches, middleware, OS failures or
 resource exhaustion.
 
-The 0.1.0 validation record is preserved in Git history and tag v0.1.0.
+Earlier validation records are preserved in Git history and tags v0.1.0 and
+v0.2.0. The new runtime behavior is confined to the selector parser/defaults;
+other collectors and permanent omission rules are unchanged.

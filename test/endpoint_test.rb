@@ -18,7 +18,7 @@ class EndpointTest < Minitest::Test
   def test_all_request_data_and_env_secrets_are_deliberately_returned
     with_environment("RAILS_RUNTIME_INFO_TEST_SECRET" => "plain-secret") do
       env = rack_env("payload", "HTTP_AUTHORIZATION" => "Basic xyz", "HTTP_COOKIE" => "secret=yes", "custom.object" => Object.new)
-      env["QUERY_STRING"] += "&what=%2Benvironment"
+      env["QUERY_STRING"] += "&what=environment,request.body"
       _, _, data = response(env)
       assert_equal "plain-secret", data["environment"]["RAILS_RUNTIME_INFO_TEST_SECRET"]
       assert_equal "Basic xyz", data["request"]["headers"]["Authorization"]
@@ -45,7 +45,7 @@ class EndpointTest < Minitest::Test
   def test_body_failure_does_not_fail_other_sections
     input = Object.new
     def input.read(_); raise IOError, "body unavailable"; end
-    status, _, data = response(rack_env("", "rack.input" => input))
+    status, _, data = response(what_env("request.body", "", "rack.input" => input))
     assert_equal 200, status
     assert_nil data["request"]["body"]
     assert_equal "IOError", data["errors"]["request.body"]["class"]
@@ -253,6 +253,7 @@ class EndpointTest < Minitest::Test
     env = rack_env("unread input", "RAW_POST_DATA" => cached, "rack.request.form_vars" => cached, "rack.request.form_hash" => { "payload" => cached }, "action_dispatch.request.request_parameters" => { "payload" => cached }, "action_dispatch.request.parameters" => { "payload" => cached })
     # Even an indirect reference back to this env must not leak the cached body.
     env["nested"] = { "same_request" => env }
+    env["QUERY_STRING"] += "&what=request.body"
     status, _, data, text = response(env)
     assert_equal 200, status
     assert_equal limit, data["request"]["body"]["returned_bytes"]

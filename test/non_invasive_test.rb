@@ -66,8 +66,8 @@ class NonInvasiveTest < Minitest::Test
     assert_equal({ "x" => 1 }, env["custom.hash"])
     assert_equal before_env, ENV.to_h
     refute env["rack.input"].closed?
-    # Reading the body necessarily advances this stream, and only this stream.
-    assert_equal "request body".bytesize, env["rack.input"].pos
+    # Default diagnostics leave the input stream untouched.
+    assert_equal 0, env["rack.input"].pos
   end
 
   def test_response_body_retains_only_json_and_close_releases_it
@@ -84,7 +84,7 @@ class NonInvasiveTest < Minitest::Test
   end
 
   def response_and_weak_reference
-    env = rack_env("temporary")
+    env = what_env("request.body", "temporary")
     weak = WeakRef.new(env)
     [RailsRuntimeInfo::Endpoint.call(env), weak]
   end
@@ -100,7 +100,7 @@ class NonInvasiveTest < Minitest::Test
   def test_threads_do_not_share_request_state
     workers = 4.times.map do |index|
       Thread.new do
-        _, _, data = response(rack_env("body-#{index}", "HTTP_X_REQUEST_MARKER" => index.to_s))
+        _, _, data = response(what_env("request.body", "body-#{index}", "HTTP_X_REQUEST_MARKER" => index.to_s))
         [index, data["request"]["headers"]["X-Request-Marker"], data["request"]["body"]["data"]]
       end
     end

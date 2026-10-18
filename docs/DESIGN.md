@@ -71,19 +71,25 @@ health. The `errors` category can be explicitly deselected like any other key.
 ## Selection and display order
 
 Selection is a request-local tree whose nodes contain an optional boolean and
-child rules. A signed parent assignment clears its prior child rules; descendants
+child rules. A parent assignment clears its prior child rules; descendants
 inherit the nearest assigned boolean. This gives left-to-right semantics without
 keeping snapshots, query objects or a global rule cache. `all` assigns the root.
-The starting expression is applied first, followed by user rules. Unknown
-nested names are allowed because the output is intentionally not a fixed schema.
+The starting expression is applied first, followed by user rules. Bare names
+include, a leading minus excludes, and an optional plus is accepted for older
+clients. Defaults exclude loaded_features, load_path, gems, environment and
+request.body. Selecting request or all later restores body capture because a
+parent assignment clears earlier descendant rules. Unknown nested names are
+allowed because the output is intentionally not a fixed schema.
 
 Only exact form-decoded `what` keys are used. URI decoding is loaded on demand;
-no request parameter object is constructed. Literal plus signs therefore need
-percent encoding. Repeated values retain wire order. Selector size/count/depth
-limits bound tree growth. Unrelated query values are never decoded.
+no request parameter object is constructed. Bare names need no plus-sign
+encoding; legacy encoded plus signs remain valid. Literal plus signs decode to
+spaces, which are permitted around tokens. Repeated values retain wire order.
+Selector size/count/depth limits bound tree growth. Unrelated query values are never decoded.
 
 Top-level sections and independently collected fields consult the selection
-before evaluating their blocks. In particular a disabled body is never read.
+before evaluating their blocks. In particular a disabled body is never read;
+by default the body collector is not invoked even when Rails has cached it.
 Projection prunes only the owned, normalized JSON hashes in place; it never
 mutates source application hashes. Arrays/scalars are leaves. Flat dotted Rack
 keys participate in the selector path without being restructured in output.

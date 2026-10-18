@@ -26,15 +26,17 @@ required.
   Within request.rack_environment, allow only the documented action_dispatch
   keys; omit all others in that namespace, nested action_dispatch containers,
   and rack.session.options. Apply omissions before touching values, recursively
-  through plain env containers. No selector, including +all, may override this.
+  through plain env containers. No selector, including all, may override this.
   Do not add arbitrary credential heuristics or built-in authentication.
   Authentication and access restrictions are the ingress operator's job.
 - The only gem inventory is Gem.loaded_specs; never read a lockfile or resolve
   dependencies. The default selection is exactly
-  +all,-loaded_features,-load_path,-gems,-environment. Apply user what rules
-  left to right after that default, with mandatory signs. Preserve the documented
-  nested/parent-reset semantics and form-decoding of plus signs. Skip excluded
+  all,-loaded_features,-load_path,-gems,-environment,-request.body. Apply user
+  what rules left to right after that default. Bare names include; - excludes;
+  explicit + remains accepted for compatibility. Preserve the documented
+  nested/parent-reset semantics and standard query form decoding. Skip excluded
   collectors, especially request body reads; do not invoke Rack/Rails params.
+  Default requests must not call the body collector, even for cached bodies.
 - Output selected gc, yjit, runtime, application, request sections last, in that
   order. Keep sampling order independent of presentation order.
 - Return at most 100 KiB of request-body bytes; read at most one extra byte for
@@ -76,7 +78,7 @@ objects as proof of full Rails integration compatibility.
 Add focused regression tests for behavior changes. Test absent APIs, nil and
 non-finite statistics, invalid strings, body boundaries, collector failures,
 lazy objects, lack of persistent request retention and normal concurrent use.
-Also test permanent server-secret omissions, signed/nested selector ordering,
+Also test permanent server-secret omissions, bare/signed/nested selector ordering,
 query encoding, disabled collectors, and explicit/automatic require behavior.
 The optional script/bundler_smoke uses installed Bundler and temporary local
 path-gem Gemfiles only; it is not a Rails integration test.

@@ -25,7 +25,7 @@ root = File.expand_path("..", __dir__)
       end
       abort "endpoint not loaded" unless defined?(RailsRuntimeInfo::Endpoint)
       abort "second require should be a no-op" if require "rails_runtime_info"
-      status, headers, body = RailsRuntimeInfo::Endpoint.call("QUERY_STRING" => "what=-all%2C%2Bgems", "REQUEST_METHOD" => "GET")
+      status, headers, body = RailsRuntimeInfo::Endpoint.call("QUERY_STRING" => "what=-all,gems", "REQUEST_METHOD" => "GET")
       text = String.new
       begin
         body.each { |chunk| text << chunk }

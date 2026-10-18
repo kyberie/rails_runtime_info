@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+- Accept bare category and dotted-path names as inclusion rules; `-` still
+  excludes. Explicit `+` remains accepted for compatibility. Plain `what` URLs
+  no longer require percent-encoded plus signs.
+- Add `-request.body` to the default selection. Default diagnostics do not call
+  the body collector or read rack.input. Select request.body, request or all
+  to restore bounded body capture; later exclusions still take precedence.
+- Update examples, agent guidance and regression tests for the new defaults,
+  unsigned selectors, legacy signed queries and cached-body omission.
+
 ## 0.2.0
 
 - Remove the Gemfile.lock inventory and all lockfile-reading code; retain only

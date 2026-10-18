@@ -11,10 +11,15 @@ class SelectionTest < Minitest::Test
   def test_exact_defaults_and_output_order
     _, _, data = response
     assert_equal %w[gem_version time_utc process server errors gc yjit runtime application request], data.keys
+    assert_equal "all,-loaded_features,-load_path,-gems,-environment,-request.body", RailsRuntimeInfo::Selection::DEFAULT
+    refute data["request"].key?("body")
   end
 
   def test_all_restores_every_category_and_requested_tail
-    _, _, data = response(what_env("+all"))
+    env = what_env("all", "explicit capture")
+    _, _, data = response(env)
+    assert_equal "explicit capture", data["request"]["body"]["data"]
+    assert_equal "explicit capture".bytesize, env["rack.input"].pos
     assert_equal RailsRuntimeInfo::Selection::CATEGORIES, data.keys
     assert_equal %w[gc yjit runtime application request], data.keys.last(5)
     assert_kind_of Hash, data["environment"]
@@ -24,7 +29,7 @@ class SelectionTest < Minitest::Test
   end
 
   def test_expression_is_applied_after_defaults_not_instead_of_them
-    _, _, data = response(what_env("+gems"))
+    _, _, data = response(what_env("gems"))
     assert data.key?("gems")
     assert data.key?("request")
     refute data.key?("environment")
@@ -39,20 +44,20 @@ class SelectionTest < Minitest::Test
   end
 
   def test_left_to_right_top_level
-    _, _, data = response(what_env("-all,+gc,-gc,+request"))
+    _, _, data = response(what_env("-all,gc,-gc,request"))
     assert_equal ["request"], data.keys
     assert data["request"].key?("headers")
   end
 
   def test_nested_exclusion_from_default_request
-    _, _, data = response(what_env("+request,-request.rack_environment"))
+    _, _, data = response(what_env("request,-request.rack_environment"))
     refute data["request"].key?("rack_environment")
     assert data["request"].key?("headers")
     assert data.key?("runtime")
   end
 
   def test_nested_inclusion_recreates_parent_after_all_is_disabled
-    _, _, data = response(what_env("-all,+request.headers"))
+    _, _, data = response(what_env("-all,request.headers"))
     assert_equal ["request"], data.keys
     assert_equal ["headers"], data["request"].keys
     assert_equal "app.internal", data["request"]["headers"]["Host"]
@@ -60,27 +65,27 @@ class SelectionTest < Minitest::Test
 
   def test_later_parent_inclusion_clears_prior_child_exclusion
     document = { "request" => { "headers" => { "Host" => "test" }, "body" => "data" } }
-    assert_equal document, select("-all,+request,-request.body,+request", Marshal.load(Marshal.dump(document)))
+    assert_equal document, select("-all,request,-request.body,request", Marshal.load(Marshal.dump(document)))
   end
 
   def test_later_parent_exclusion_clears_prior_child_inclusion
-    assert_equal({}, select("-all,+request.headers,-request", { "request" => { "headers" => {} } }))
+    assert_equal({}, select("-all,request.headers,-request", { "request" => { "headers" => {} } }))
   end
 
   def test_later_all_clears_all_child_exclusions
     document = { "request" => { "body" => "data" }, "environment" => { "K" => "V" } }
-    assert_equal document, select("-request.body,+all", Marshal.load(Marshal.dump(document)))
+    assert_equal document, select("-request.body,all", Marshal.load(Marshal.dump(document)))
   end
 
   def test_child_reinclusion_does_not_resurrect_siblings
-    data = select("-all,+request,-request,+request.headers.Host", { "request" => { "headers" => { "Host" => "test", "Cookie" => "cookie" }, "body" => "body" } })
+    data = select("-all,request,-request,request.headers.Host", { "request" => { "headers" => { "Host" => "test", "Cookie" => "cookie" }, "body" => "body" } })
     assert_equal({ "request" => { "headers" => { "Host" => "test" } } }, data)
   end
 
   def test_complete_gc_api_called_but_only_requested_stat_returned
     stats = { :count => 42, :other => 7 }
     GC.stub(:stat, stats) do
-      _, _, data = response(what_env("-all,+gc.stat.count"))
+      _, _, data = response(what_env("-all,gc.stat.count"))
       assert_equal({ "gc" => { "stat" => { "count" => 42 } } }, data)
     end
   end
@@ -91,34 +96,34 @@ class SelectionTest < Minitest::Test
     def jit.runtime_stats; raise "unrequested stats called"; end
     vm = Module.new; vm.const_set(:YJIT, jit)
     with_constant(Object, :RubyVM, vm) do
-      _, _, data = response(what_env("-all,+yjit.enabled"))
+      _, _, data = response(what_env("-all,yjit.enabled"))
       assert_equal({ "yjit" => { "enabled" => true } }, data)
     end
   end
 
   def test_dotted_rack_keys_can_be_selected_but_stay_flat
-    env = what_env("-all,+request.rack_environment.action_dispatch.request_id", "", "action_dispatch.request_id" => "trace-id")
+    env = what_env("-all,request.rack_environment.action_dispatch.request_id", "", "action_dispatch.request_id" => "trace-id")
     _, _, data = response(env)
     assert_equal({ "request" => { "rack_environment" => { "action_dispatch.request_id" => "trace-id" } } }, data)
   end
 
   def test_unknown_nested_keys_are_no_ops_not_schema_requirements
-    _, _, data = response(what_env("-all,+request.not_installed"))
+    _, _, data = response(what_env("-all,request.not_installed"))
     assert_equal({}, data)
   end
 
   def test_arrays_are_atomic_and_not_projected_by_index
     data = { "gems" => { "activated" => [{ "name" => "ruby" }] } }
-    assert_equal({}, select("-all,+gems.activated.0.name", data))
+    assert_equal({}, select("-all,gems.activated.0.name", data))
   end
 
   def test_error_section_is_selectable
-    _, _, data = response(what_env("-all,+errors"))
+    _, _, data = response(what_env("-all,errors"))
     assert_equal({ "errors" => {} }, data)
   end
 
   def test_repeated_what_values_apply_in_wire_order
-    query = URI.encode_www_form([["what", "-all,+gc"], ["what", "-gc,+request.headers"]])
+    query = URI.encode_www_form([["what", "-all,gc"], ["what", "-gc,request.headers"]])
     _, _, data = response(rack_env("", "QUERY_STRING" => query))
     assert_equal ["request"], data.keys
     assert_equal ["headers"], data["request"].keys
@@ -130,6 +135,7 @@ class SelectionTest < Minitest::Test
       assert_equal 200, status
       assert data.key?("request")
       refute data.key?("environment")
+      refute data["request"].key?("body")
     end
   end
 
@@ -144,15 +150,31 @@ class SelectionTest < Minitest::Test
     assert_equal({ "runtime" => { "ruby_version" => RUBY_VERSION } }, data)
   end
 
-  def test_unescaped_plus_is_rejected_with_encoding_hint
-    status, _, data = response(rack_env("", "QUERY_STRING" => "what=+request"))
-    assert_equal 400, status
-    assert_equal "invalid_what", data["error"]
-    assert_includes data["message"], "%2B"
+  def test_plain_selector_needs_no_url_encoding
+    status, _, data = response(rack_env("", "QUERY_STRING" => "what=-all,request.headers,request.metadata"))
+    assert_equal 200, status
+    assert_equal ["request"], data.keys
+    assert_equal %w[metadata headers], data["request"].keys
   end
 
-  def test_required_prefix_empty_tokens_and_malformed_paths
-    %w[all request + - +request,,+gc +request, ,+request +request. +request..body +all.request +made_up].each do |expression|
+  def test_explicit_and_unescaped_plus_remain_compatible
+    ["what=-all,request.headers", "what=-all,%2Brequest.headers", "what=-all,+request.headers"].each do |query|
+      status, _, data = response(rack_env("", "QUERY_STRING" => query))
+      assert_equal 200, status, query
+      assert_equal ["request"], data.keys
+      assert_equal ["headers"], data["request"].keys
+    end
+  end
+
+  def test_signed_and_unsigned_rules_have_identical_selection
+    document = { "request" => { "headers" => { "Host" => "test" }, "body" => "data" }, "gems" => { "activated" => [] } }
+    signed = select("-all,+request,-request.body,+gems", Marshal.load(Marshal.dump(document)))
+    unsigned = select("-all,request,-request.body,gems", Marshal.load(Marshal.dump(document)))
+    assert_equal signed, unsigned
+  end
+
+  def test_empty_tokens_and_malformed_paths
+    %w[+ - request,,gc request, ,request request. request..body all.request made_up ++request +-request --request -+request +request,,+gc].each do |expression|
       status, _, data = response(what_env(expression))
       assert_equal 400, status, expression
       assert_equal "invalid_what", data["error"], expression
@@ -160,7 +182,7 @@ class SelectionTest < Minitest::Test
   end
 
   def test_whitespace_between_rules_is_accepted_after_decoding
-    _, _, data = response(what_env(" -all, +request.headers "))
+    _, _, data = response(what_env(" -all, request.headers "))
     assert_equal ["request"], data.keys
     assert_equal ["headers"], data["request"].keys
   end
@@ -174,7 +196,7 @@ class SelectionTest < Minitest::Test
   end
 
   def test_selector_byte_and_rule_limits
-    ["+request" + " " * RailsRuntimeInfo::Selection::MAX_BYTES, Array.new(RailsRuntimeInfo::Selection::MAX_RULES + 1, "+gc").join(",")].each do |expression|
+    ["request" + " " * RailsRuntimeInfo::Selection::MAX_BYTES, Array.new(RailsRuntimeInfo::Selection::MAX_RULES + 1, "gc").join(",")].each do |expression|
       status, _, data = response(what_env(expression))
       assert_equal 400, status
       assert_equal "invalid_what", data["error"]
@@ -182,7 +204,7 @@ class SelectionTest < Minitest::Test
   end
 
   def test_selector_depth_limit
-    status, _, data = response(what_env("+request" + ".x" * RailsRuntimeInfo::Selection::MAX_DEPTH))
+    status, _, data = response(what_env("request" + ".x" * RailsRuntimeInfo::Selection::MAX_DEPTH))
     assert_equal 400, status
     assert_equal "invalid_what", data["error"]
   end
@@ -193,7 +215,7 @@ class SelectionTest < Minitest::Test
       with_instance_method(RailsRuntimeInfo::Snapshot, :application, forbidden) do
         with_instance_method(RailsRuntimeInfo::Snapshot, :process_info, forbidden) do
           with_instance_method(RailsRuntimeInfo::Snapshot, :gem_info, forbidden) do
-            status, _, data = response(what_env("-all,+request.headers,+errors"))
+            status, _, data = response(what_env("-all,request.headers,errors"))
             assert_equal 200, status
             assert_equal({}, data["errors"])
             assert_equal %w[errors request], data.keys
@@ -214,6 +236,58 @@ class SelectionTest < Minitest::Test
         refute data["errors"].key?("gems")
       end
     end
+  end
+
+  def test_default_body_collector_is_not_called
+    input = StringIO.new("must remain unread")
+    forbidden = proc { raise "default must not collect a body" }
+    with_instance_method(RailsRuntimeInfo::RequestInfo, :body, forbidden) do
+      status, _, data = response(rack_env("", "rack.input" => input))
+      assert_equal 200, status
+      assert_equal 0, input.pos
+      refute data["request"].key?("body")
+      refute data["errors"].key?("request.body")
+    end
+  end
+
+  def test_default_cached_body_remains_a_descriptor_not_a_payload
+    cached = "synthetic-cached-body"
+    env = rack_env("must remain unread", "RAW_POST_DATA" => cached, "rack.request.form_vars" => cached)
+    _, _, data, text = response(env)
+    assert_equal 0, env["rack.input"].pos
+    refute data["request"].key?("body")
+    refute_includes text, cached
+    %w[RAW_POST_DATA rack.request.form_vars].each do |key|
+      assert_equal "request_body_cache", data["request"]["rack_environment"][key]["_type"]
+    end
+    assert_same cached, env["RAW_POST_DATA"]
+  end
+
+  def test_bare_body_inclusion_adds_to_defaults
+    env = what_env("request.body", "selected body")
+    status, _, data = response(env)
+    assert_equal 200, status
+    assert_equal "selected body", data["request"]["body"]["data"]
+    assert_equal "selected body".bytesize, env["rack.input"].pos
+    assert data.key?("runtime")
+    refute data.key?("gems")
+    refute data.key?("environment")
+  end
+
+  def test_later_body_exclusion_prevents_read_after_parent_inclusion
+    env = what_env("request,-request.body", "must remain unread")
+    _, _, data = response(env)
+    assert_equal 0, env["rack.input"].pos
+    refute data["request"].key?("body")
+    assert data["request"].key?("headers")
+  end
+
+  def test_bare_parent_inclusion_restores_body_despite_default_exclusion
+    env = what_env("-all,request", "selected body")
+    _, _, data = response(env)
+    assert_equal ["request"], data.keys
+    assert_equal "selected body", data["request"]["body"]["data"]
+    assert_equal "selected body".bytesize, env["rack.input"].pos
   end
 
   def test_excluding_body_does_not_read_input
@@ -249,7 +323,7 @@ class SelectionTest < Minitest::Test
   def test_invalid_selection_does_not_collect_or_read_body
     input = StringIO.new("unread")
     GC.stub(:stat, proc { raise "must not collect" }) do
-      status, headers, data, text = response(what_env("request", "", "rack.input" => input))
+      status, headers, data, text = response(what_env("request..body", "", "rack.input" => input))
       assert_equal 400, status
       assert_equal 0, input.pos
       assert_equal "invalid_what", data["error"]
@@ -259,7 +333,7 @@ class SelectionTest < Minitest::Test
   end
 
   def test_invalid_selection_head_response_is_still_bodyless
-    status, headers, data, text = response(what_env("request", "", "REQUEST_METHOD" => "HEAD"))
+    status, headers, data, text = response(what_env("request..body", "", "REQUEST_METHOD" => "HEAD"))
     assert_equal 400, status
     assert_nil data
     assert_equal "", text
@@ -268,14 +342,14 @@ class SelectionTest < Minitest::Test
 
   def test_json_failure_on_invalid_selection_has_last_resort_fallback
     JSON.stub(:pretty_generate, proc { |*_| raise "JSON unavailable" }) do
-      status, _, data = response(what_env("request"))
+      status, _, data = response(what_env("request..body"))
       assert_equal 500, status
       assert data["error"]
     end
   end
 
   def test_selection_state_is_not_retained_between_requests
-    _, _, first = response(what_env("-all,+request.headers"))
+    _, _, first = response(what_env("-all,request.headers"))
     _, _, second = response
     assert_equal ["request"], first.keys
     assert second.key?("gc")
@@ -290,14 +364,15 @@ class SelectionTest < Minitest::Test
     paths = %w[all request request.headers request.headers.Host request.body request.rack_environment request.rack_environment.action_dispatch request.rack_environment.action_dispatch.request_id gc gc.stat gc.stat.count gems gems.activated environment environment.K]
     random = Random.new(81731)
     100.times do
-      rules = Array.new(16) { (random.rand(2).zero? ? "+" : "-") + paths[random.rand(paths.length)] }
+      rules = Array.new(16) { ["", "+", "-"][random.rand(3)] + paths[random.rand(paths.length)] }
       expression = rules.join(",")
       reference_rules = RailsRuntimeInfo::Selection::DEFAULT.split(",") + rules
       enabled = proc do |path|
         state = false
         reference_rules.each do |rule|
-          prefix = rule[1..-1]
-          state = rule[0] == "+" if prefix == "all" || path == prefix || path.start_with?(prefix + ".")
+          signed = rule.start_with?("+", "-")
+          prefix = signed ? rule[1..-1] : rule
+          state = !rule.start_with?("-") if prefix == "all" || path == prefix || path.start_with?(prefix + ".")
         end
         state
       end

@@ -76,7 +76,7 @@ class RequestSecurityTest < Minitest::Test
   end
 
   def test_http_credentials_are_not_mistaken_for_rails_server_config
-    env = rack_env("request-secret", "HTTP_AUTHORIZATION" => "Basic client-auth", "HTTP_COOKIE" => "client-cookie", "HTTP_ACTION_DISPATCH_SECRET_KEY_BASE" => "client-provided-header")
+    env = what_env("request.body", "request-secret", "HTTP_AUTHORIZATION" => "Basic client-auth", "HTTP_COOKIE" => "client-cookie", "HTTP_ACTION_DISPATCH_SECRET_KEY_BASE" => "client-provided-header")
     _, _, data = response(env)
     assert_equal "Basic client-auth", data["request"]["headers"]["Authorization"]
     assert_equal "client-cookie", data["request"]["headers"]["Cookie"]

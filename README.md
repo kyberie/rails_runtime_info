@@ -33,7 +33,7 @@ observed, not required or reconfigured.
 Restore the repository from the supplied full Git bundle:
 
 ```sh
-git clone rails_runtime_info-0.2.0.bundle rails_runtime_info
+git clone rails_runtime_info-0.2.1.bundle rails_runtime_info
 ```
 
 For an adjacent local checkout, add this to the application's Gemfile in a group
@@ -116,7 +116,7 @@ The application itself must support its chosen Ruby/Rails/Rack combination.
 | `process` | PID/PPID, user/group IDs, Ruby thread count, CPU time, working directory, program name, arguments and `Etc.uname`. No account-name or hostname lookup is performed. |
 | `process.linux` | `/proc/self/status`, `smaps_rollup`, I/O counters, limits, cgroups, command line, executable link, FD count, estimated process lifetime, OS release and allocator-library hints. |
 | `server` | Rack's server-software value and passive information from an already-loaded `PhusionPassenger` constant. This does not prove which server handled the request. |
-| `request` | Method, URI fields, query string, scheme/protocol/address metadata, all available HTTP header values, reconstructed URL, safe Rack-environment snapshot and bounded raw body. |
+| `request` | Method, URI fields, query string, scheme/protocol/address metadata, all available HTTP header values, reconstructed URL, safe Rack-environment snapshot and opt-in bounded raw body. |
 | `errors` | Independently failed collectors, with exception class and best-effort message. |
 
 No database collector is present, not even connection-pool inspection. There
@@ -129,28 +129,31 @@ custom collector callbacks in this version.
 The initial selection is always:
 
 ```text
-+all,-loaded_features,-load_path,-gems,-environment
+all,-loaded_features,-load_path,-gems,-environment,-request.body
 ```
 
 The optional `what` query parameter is a comma-separated sequence applied
-**after those defaults, from left to right**. Every token must start with `+`
-or `-`. `+all` enables everything available; `-all` disables everything, including
-`gem_version`, `time_utc` and `errors`. `all` is special only as the whole name.
+**after those defaults, from left to right**. A bare name includes that section;
+a leading `-` excludes it. An explicit `+` remains accepted for compatibility but
+is unnecessary. `all` enables everything available, including the request body;
+`-all` disables everything, including `gem_version`, `time_utc` and `errors`.
+`all` is special only as the whole name.
 A later rule for a parent replaces earlier rules for that parent and its
 children. Selecting a child of a disabled parent brings back only that child,
 not its siblings.
 
 | Decoded `what` value | Effect |
 | --- | --- |
-| `+all` | All available categories, still subject to permanent secret omissions and body/normalization limits. |
-| `+gems,+environment` | Defaults plus activated gems and full ENV. |
-| `-all,+request` | Request information only. |
-| `+request,-request.rack_environment` | Defaults, with the request's Rack-environment snapshot excluded. |
-| `-all,+request.headers,+request.metadata` | Only request headers and metadata. Does not read the body. |
-| `-request.body` | Defaults without body capture; `rack.input` is not read. |
-| `-all,+gc.stat.count,+errors` | Only the GC count and collection errors. The GC API still returns its whole hash internally. |
-| `-all,+request.rack_environment.action_dispatch.request_id` | Only an already-present Rails request ID. |
-| `-request.rack_environment,+request` | The later parent inclusion restores the entire permitted request section. |
+| `all` | All available categories, still subject to permanent secret omissions and body/normalization limits. |
+| `gems,environment` | Defaults plus activated gems and full ENV. |
+| `-all,request` | Request information only, including the bounded body. |
+| `-request.rack_environment` | Defaults, without the request's Rack-environment snapshot; the body remains excluded. |
+| `-all,request.headers,request.metadata` | Only request headers and metadata. Does not read the body. |
+| `request.body` | Defaults plus bounded body capture. |
+| `request,-request.body` | Restore the request section, then exclude its body; `rack.input` is not read. |
+| `-all,gc.stat.count,errors` | Only the GC count and collection errors. The GC API still returns its whole hash internally. |
+| `-all,request.rack_environment.action_dispatch.request_id` | Only an already-present Rails request ID. |
+| `-request.rack_environment,request` | The later parent inclusion restores the entire permitted request section, including body capture. |
 
 Names are case-sensitive and match top-level JSON keys. Current names are:
 `gem_version`, `time_utc`, `process`, `server`, `gems`, `environment`,
@@ -173,22 +176,27 @@ A narrower leaf selector may still require its parent API call, such as
 `GC.stat`; it does not promise zero work on every unreturned sibling.
 Selection itself does not provide access control.
 
-**Encode the plus sign as `%2B` in a URL.** Standard form decoding interprets a
-literal `+` as a space, so `?what=+request` is invalid. Let curl do the encoding:
+Bare inclusion names need no plus-sign encoding. For request headers and
+metadata only, use a plain URL:
 
 ```sh
-curl --user diagnostics --get --data-urlencode 'what=-all,+request,-request.rack_environment' 'https://app.internal/_internal/diagnostics'
+curl --user diagnostics 'https://app.internal/_internal/diagnostics?what=-all,request.headers,request.metadata'
 ```
 
-That example prompts for the Basic-auth password. An equivalent encoded path is:
+That example prompts for the Basic-auth password and leaves `rack.input` unread.
+To add body capture to the defaults, use:
 
 ```text
-/_internal/diagnostics?what=-all,%2Brequest,-request.rack_environment
+/_internal/diagnostics?what=request.body
 ```
+
+Query parsing still uses standard form decoding. Legacy `%2Brequest` selectors
+remain valid; a literal `+request` also works because `+` decodes to surrounding
+whitespace and bare `request` now means inclusion. Prefer bare names.
 
 Repeated `what` parameters are concatenated in query order. An absent or empty
 value changes nothing. Surrounding spaces around individual tokens are allowed.
-Malformed tokens, missing signs, unknown top-level names, invalid percent
+Malformed tokens, unknown top-level names, invalid percent
 encoding, non-printable/non-ASCII selectors, or limit violations return a JSON
 **400** with `error: "invalid_what"` before diagnostics/body collection. Limits
 are 8 KiB of combined decoded selector text, 128 user rules and 24 path
@@ -201,7 +209,7 @@ are not interpreted, and their values remain available as request data.
 requiring the listed gems. There is no locked/resolved inventory and no
 `Gemfile.lock`/`gems.locked` reader. `Bundler.load`, `Bundler.definition` and
 Gemfile/gemspec evaluation are never used by the endpoint. Enable the list with
-`what=+gems` (URL-encoded as `what=%2Bgems`) or `what=+all`.
+`what=gems` or `what=all`.
 
 ### Server-secret omissions in the Rack environment
 
@@ -229,7 +237,7 @@ current/previous signing secrets there. Nested `action_dispatch` containers
 are omitted rather than interpreted as another configuration format. These
 rules apply recursively within the Rack-environment snapshot, including
 symbol-keyed entries and aliases. They never delete or mutate the actual env.
-`+all` and explicit dotted selectors cannot override them.
+`all` and explicit dotted selectors cannot override them.
 
 HTTP headers, raw query strings and the bounded raw body remain deliberately
 unfiltered. Explicitly selecting `environment` still returns full process ENV:
@@ -251,8 +259,15 @@ reported as data, not trusted as authorization or independently interpreted.
 `reconstructed_url` uses the Rack scheme, Host/server fields, script/path and
 query; raw URI fields are reported separately when supplied by the server.
 
-When an already-buffered Rails `RAW_POST_DATA` String exists, its bounded prefix
-is used without copying the entire cache or touching `rack.input`. Known raw and
+**Body capture is disabled by default.** Without an inclusion such as
+`what=request.body`, `what=request` or `what=all`, the body collector is not
+called and this gem leaves `rack.input` unread. Earlier middleware may already
+have read or buffered it. Parent inclusions reset earlier child exclusions;
+append `-request.body` after `request` or `all` to keep capture disabled.
+
+When body capture is selected and an already-buffered Rails `RAW_POST_DATA`
+String exists, its bounded prefix is used without copying the entire cache or
+touching `rack.input`. Known raw and
 parsed Rack body-cache entries in the Rack-environment snapshot are descriptors,
 not duplicate payloads, so they cannot bypass this capture limit. These include
 `RAW_POST_DATA` and Rack form caches. Rails request-parameter caches are omitted

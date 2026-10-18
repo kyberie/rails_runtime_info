@@ -5,7 +5,7 @@ module RailsRuntimeInfo
   # all previous rules below that parent. Never examines application objects.
   class Selection
     CATEGORIES = %w[gem_version time_utc process server gems environment loaded_features load_path errors gc yjit runtime application request].freeze
-    DEFAULT = "+all,-loaded_features,-load_path,-gems,-environment".freeze
+    DEFAULT = "all,-loaded_features,-load_path,-gems,-environment,-request.body".freeze
     MAX_BYTES = 8192
     MAX_RULES = 128
     MAX_DEPTH = 24
@@ -81,11 +81,11 @@ module RailsRuntimeInfo
 
     def apply_expression(expression)
       expression.split(",", -1).each do |token|
-        match = /\A([+-])([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\z/.match(token.strip)
+        match = /\A([+-]?)([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\z/.match(token.strip)
         unless match
-          raise Invalid, "each what rule needs + or - and a category or dotted path; URL-encode + as %2B"
+          raise Invalid, "each what rule needs a category or dotted path; omit the prefix to include or use - to exclude"
         end
-        enabled = match[1] == "+"
+        enabled = match[1] != "-"
         path = match[2]
         parts = path.split(".")
         if path == "all"
