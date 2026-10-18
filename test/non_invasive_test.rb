@@ -37,7 +37,7 @@ class NonInvasiveTest < Minitest::Test
     def bundler.default_lockfile; raise "Bundler.default_lockfile called"; end
     with_constant(Object, :ActiveRecord, active_record) do
       with_constant(Object, :Bundler, bundler) do
-        status, _, data = response
+        status, _, data = response(what_env("+gems"))
         assert_equal 200, status
         assert data["gems"]
         assert_equal "/must/not/load/active_record", active_record.autoload?(:Base)

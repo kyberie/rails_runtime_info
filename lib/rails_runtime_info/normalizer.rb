@@ -8,10 +8,13 @@ module RailsRuntimeInfo
   class Normalizer
     MAX_DEPTH = 24
     MAX_NODES = 100_000
-    REQUEST_CACHE_KEYS = %w[RAW_POST_DATA rack.request.form_vars rack.request.form_hash rack.request.form_pairs action_dispatch.request.request_parameters action_dispatch.request.parameters].freeze
+    REQUEST_CACHE_KEYS = %w[RAW_POST_DATA rack.request.form_vars rack.request.form_hash rack.request.form_pairs].freeze
+    # These are flat Rack keys, not a Rails object to introspect. Everything
+    # else in the namespace is omitted, including future/unknown additions.
+    ACTION_DISPATCH_KEYS = %w[action_dispatch.request_id action_dispatch.remote_ip action_dispatch.original_path action_dispatch.request.path_parameters action_dispatch.show_exceptions action_dispatch.show_detailed_exceptions].freeze
 
     def initialize(options = {})
-      @omit_request_caches = options[:omit_request_caches]
+      @request_environment = options[:request_environment]
       @ancestors = {}
       @nodes = 0
     end
@@ -87,18 +90,37 @@ module RailsRuntimeInfo
       marker("request_body_cache", fields)
     end
 
+    def omitted_request_key?(key)
+      return false unless @request_environment
+      klass = Object.instance_method(:class).bind(key).call
+      name = if klass <= String
+        String.new(key)
+      elsif klass == Symbol
+        key.to_s
+      end
+      return false unless name
+      # A nested action_dispatch container is not a standard Rack key; do not
+      # let it bypass the flat-key allowlist. Session options can carry signing
+      # secrets with Rack session middleware, so exclude that entry as well.
+      return true if name == "action_dispatch" || name == "rack.session.options"
+      name.start_with?("action_dispatch.") && !ACTION_DISPATCH_KEYS.include?(name)
+    end
+
     def copy_hash(value, depth)
       result = {}
       entries = []
       ordinary_keys = true
       value.each do |key, item|
+        # Omit before inspecting/normalizing the value; no secret placeholders
+        # or copied key material escape. Applies recursively to env aliases.
+        next if omitted_request_key?(key)
         if @nodes >= MAX_NODES
           entries << [marker("limit", "reason" => "node_limit"), nil]
           ordinary_keys = false
           break
         end
         normalized_key = key.instance_of?(Integer) ? key.to_s : call(key, depth + 1)
-        normalized_value = if @omit_request_caches && key.kind_of?(String) && REQUEST_CACHE_KEYS.include?(key)
+        normalized_value = if @request_environment && key.kind_of?(String) && REQUEST_CACHE_KEYS.include?(key)
           request_cache_descriptor(item)
         else
           call(item, depth + 1)

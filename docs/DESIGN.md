@@ -18,15 +18,16 @@ not promised stable.
 | `normalizer.rb` | Copies safe primitives, guards traversal, avoids application serialization hooks and represents unsupported/binary/non-finite data. |
 | `request_info.rb` | Raw request metadata, reconstructed headers/URL and bounded body capture. |
 | `linux_process.rb` | Bounded /proc readers and limited parsing; no subprocesses or native bindings. |
-| `lockfile.rb` | Plain-text inventory extraction, without invoking Bundler or loading gems. |
+| `selection.rb` | Request-local signed selection tree, narrow query parsing, collection guards and in-place JSON projection. |
 | `support.rb` | Non-autoloading constant lookup, class labels, UTC formatting and bounded regular-file reads. |
 
-Known Rack/Rails body caches are descriptors in the environment snapshot, not
-second copies of an unbounded body. Existing RAW_POST_DATA is used only through
+Known Rack body caches are descriptors in the environment snapshot, not
+second copies of an unbounded body. Rails parameter caches are omitted by the
+Action Dispatch allowlist. Existing RAW_POST_DATA is used only through
 a bounded prefix. Other input streams are read at most 100 KiB plus one byte.
 
 No request context reaches a class-level cache. `Snapshot` and its referenced
-request become unreachable after serialization returns. `Body` stores no block,
+request and selection tree become unreachable after serialization returns. `Body` stores no block,
 normalizer, snapshot or request, and drops the JSON reference on `close`.
 
 ## Rails is optional, and initialization is deliberately avoided
@@ -63,7 +64,60 @@ returned. Failure formatting has its own fallback.
 The last-resort JSON response is a constant literal so a broken or missing JSON
 serializer cannot recursively break its own error handler. It uses status 500.
 A partial successful diagnostic snapshot uses 200, even when some collectors
-failed. Neither path asserts application health.
+failed. Invalid `what` uses 400 before collectors run. JSON generation of that
+error is also inside the last-resort boundary. No status asserts application
+health. The `errors` category can be explicitly deselected like any other key.
+
+## Selection and display order
+
+Selection is a request-local tree whose nodes contain an optional boolean and
+child rules. A signed parent assignment clears its prior child rules; descendants
+inherit the nearest assigned boolean. This gives left-to-right semantics without
+keeping snapshots, query objects or a global rule cache. `all` assigns the root.
+The starting expression is applied first, followed by user rules. Unknown
+nested names are allowed because the output is intentionally not a fixed schema.
+
+Only exact form-decoded `what` keys are used. URI decoding is loaded on demand;
+no request parameter object is constructed. Literal plus signs therefore need
+percent encoding. Repeated values retain wire order. Selector size/count/depth
+limits bound tree growth. Unrelated query values are never decoded.
+
+Top-level sections and independently collected fields consult the selection
+before evaluating their blocks. In particular a disabled body is never read.
+Projection prunes only the owned, normalized JSON hashes in place; it never
+mutates source application hashes. Arrays/scalars are leaves. Flat dotted Rack
+keys participate in the selector path without being restructured in output.
+A leaf selection may still need its whole parent API (such as GC.stat).
+
+GC/YJIT are still sampled before the large collectors. After projection, a
+small top-level hash is assembled in documented display order, ending in gc,
+yjit, runtime, application, request. This reuses section references, not copies
+of their contents. The locked-gem collector, parser and lookup logic are removed.
+
+## Permanent request-environment omissions
+
+Rack env is not only HTTP input: Rails inserts application configuration and
+cryptographic material. In `Normalizer`, request-environment mode checks keys
+before visiting values. Only six documented `action_dispatch.*` keys pass:
+request ID, existing remote-IP value, original path, path parameters, and the
+two exception-display flags. The check applies recursively to plain containers;
+it also handles symbol keys and omits a nested `action_dispatch` container.
+Future/unknown namespace keys fail closed. No selector can restore an omission.
+
+The important excluded keys are `action_dispatch.secret_key_base`, the Rails
+5.1-era `action_dispatch.secret_token`, `action_dispatch.key_generator` and
+`action_dispatch.cookies_rotations`. Cookie rotations can hold actual prior
+signing/encryption keys. Cookie salts/digests and other framework configuration
+are excluded as non-allowlisted metadata, without claiming salts are themselves
+secret keys. Opaque application objects are never inspected for internal keys.
+
+A second concrete secret-bearing location is `rack.session.options`:
+Rack 2's Cookie passes its secret/old_secret options to Persisted, which copies
+those options into the request env. The whole entry is omitted. HTTP header
+values and explicitly selected ENV remain unfiltered as requested; this is not
+a general secret scanner. Custom aliases or process ENV can still contain the
+same secret. These limitations are stated in README rather than hidden behind
+an absolute no-secrets claim.
 
 ## Serialization policy
 
@@ -113,4 +167,11 @@ vendor Rails, Rack, Bundler or Ruby sources.
 - Ruby 2.4 Etc: https://docs.ruby-lang.org/en/2.4.0/Etc.html
 - Ruby YJIT observation APIs: https://docs.ruby-lang.org/en/3.3/RubyVM/YJIT.html
 - Linux proc documentation: https://docs.kernel.org/filesystems/proc.html
-- Bundler lockfile naming conventions: https://github.com/rubygems/rubygems/blob/v3.5.22/bundler/lib/bundler/shared_helpers.rb
+- Rails 5.1.7 env_config (legacy secret_token): https://github.com/rails/rails/blob/v5.1.7/railties/lib/rails/application.rb
+- Rails 7.1.5.2 env_config (server keys and cookie rotations): https://github.com/rails/rails/blob/v7.1.5.2/railties/lib/rails/application.rb
+- Rails cookie rotation key use: https://github.com/rails/rails/blob/v7.1.5.2/actionpack/lib/action_dispatch/middleware/cookies.rb
+- Rails original_path and original_request_method: https://github.com/rails/rails/blob/v7.1.5.2/actionpack/lib/action_dispatch/middleware/show_exceptions.rb
+- Rack 2.2.8 cookie secret options: https://github.com/rack/rack/blob/v2.2.8/lib/rack/session/cookie.rb
+- Rack 2.2.8 per-request session options: https://github.com/rack/rack/blob/v2.2.8/lib/rack/session/abstract/id.rb
+- Bundler setup versus require: https://github.com/rubygems/rubygems/blob/v3.5.22/bundler/lib/bundler/runtime.rb
+- URI form-decoding semantics: https://docs.ruby-lang.org/en/3.0/URI.html#method-c-decode_www_form_component

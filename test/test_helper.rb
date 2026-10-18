@@ -3,6 +3,7 @@
 require "minitest/autorun"
 require "json"
 require "stringio"
+require "uri"
 require "tmpdir"
 require "open3"
 require "rbconfig"
@@ -18,6 +19,10 @@ module TestHelpers
       "rack.errors" => StringIO.new, "rack.version" => [1, 3], "rack.multithread" => false,
       "rack.multiprocess" => true, "rack.run_once" => false, "HTTP_HOST" => "app.internal"
     }.merge(overrides)
+  end
+
+  def what_env(expression, body = "", overrides = {})
+    rack_env(body, { "QUERY_STRING" => URI.encode_www_form("what" => expression) }.merge(overrides))
   end
 
   def response(env = rack_env)

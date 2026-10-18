@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "lockfile_test"
 
 class EndpointTest < Minitest::Test
   def test_valid_response_and_headers
@@ -19,27 +18,26 @@ class EndpointTest < Minitest::Test
   def test_all_request_data_and_env_secrets_are_deliberately_returned
     with_environment("RAILS_RUNTIME_INFO_TEST_SECRET" => "plain-secret") do
       env = rack_env("payload", "HTTP_AUTHORIZATION" => "Basic xyz", "HTTP_COOKIE" => "secret=yes", "custom.object" => Object.new)
+      env["QUERY_STRING"] += "&what=%2Benvironment"
       _, _, data = response(env)
       assert_equal "plain-secret", data["environment"]["RAILS_RUNTIME_INFO_TEST_SECRET"]
       assert_equal "Basic xyz", data["request"]["headers"]["Authorization"]
       assert_equal "secret=yes", data["request"]["headers"]["Cookie"]
-      assert_equal "token=visible", data["request"]["metadata"]["QUERY_STRING"]
+      assert_equal env["QUERY_STRING"], data["request"]["metadata"]["QUERY_STRING"]
       assert_equal "payload", data["request"]["body"]["data"]
       assert_equal "object", data["request"]["rack_environment"]["custom.object"]["_type"]
     end
   end
 
-  def test_activated_and_locked_gems_are_separate
-    Dir.mktmpdir do |directory|
-      path = File.join(directory, "Gemfile")
-      File.write(path, "raise 'must not evaluate'\n")
-      File.write(path + ".lock", LockfileTest::LOCK)
-      with_environment("BUNDLE_GEMFILE" => path) do
-        _, _, data = response
-        assert_equal 6, data["gems"]["locked"]["gems"].size
+  def test_only_activated_gems_and_no_lockfile_access
+    with_environment("BUNDLE_GEMFILE" => "/never/exists/Gemfile") do
+      File.stub(:open, proc { |*_| raise "no files should be opened" }) do
+        status, _, data = response(what_env("-all,+gems,+errors"))
+        assert_equal 200, status
+        assert_equal ["activated"], data["gems"].keys
         assert_includes data["gems"]["activated"].map { |g| g["name"] }, "json"
-        refute_includes data["gems"]["activated"].map { |g| g["name"] }, "internal"
-        refute data["errors"].key?("gems.locked")
+        assert_equal({}, data["errors"])
+        refute RailsRuntimeInfo.const_defined?(:Lockfile, false)
       end
     end
   end
@@ -52,7 +50,7 @@ class EndpointTest < Minitest::Test
     assert_nil data["request"]["body"]
     assert_equal "IOError", data["errors"]["request.body"]["class"]
     assert_equal Process.pid, data["process"]["pid"]
-    assert data["environment"].kind_of?(Hash)
+    assert data["runtime"].kind_of?(Hash)
   end
 
   def test_proc_failure_is_field_local
@@ -234,7 +232,7 @@ class EndpointTest < Minitest::Test
       assert_nil data["process"]
       assert_equal "RuntimeError", data["errors"]["process"]["class"]
       assert_equal "token=visible", data["request"]["metadata"]["QUERY_STRING"]
-      assert data["gems"]
+      assert data["runtime"]
     end
   end
 
@@ -246,16 +244,6 @@ class EndpointTest < Minitest::Test
       status, _, data = response
       assert_equal 200, status
       assert_equal "(message unavailable)", data["errors"]["gc.stat"]["message"]
-    end
-  end
-
-  def test_missing_lockfile_is_local_failure
-    with_environment("BUNDLE_GEMFILE" => "/never/exists/Gemfile") do
-      status, _, data = response
-      assert_equal 200, status
-      assert_nil data["gems"]["locked"]
-      assert data["gems"]["activated"]
-      assert_equal "Errno::ENOENT", data["errors"]["gems.locked"]["class"]
     end
   end
 
@@ -272,8 +260,11 @@ class EndpointTest < Minitest::Test
     assert data["request"]["body"]["truncated"]
     assert_equal 0, env["rack.input"].pos
     refute_includes text, cached
-    %w[RAW_POST_DATA rack.request.form_vars rack.request.form_hash action_dispatch.request.request_parameters action_dispatch.request.parameters].each do |key|
+    %w[RAW_POST_DATA rack.request.form_vars rack.request.form_hash].each do |key|
       assert_equal "request_body_cache", data["request"]["rack_environment"][key]["_type"]
+    end
+    %w[action_dispatch.request.request_parameters action_dispatch.request.parameters].each do |key|
+      refute data["request"]["rack_environment"].key?(key)
     end
     assert_equal cached.bytesize, data["request"]["rack_environment"]["RAW_POST_DATA"]["bytesize"]
   end

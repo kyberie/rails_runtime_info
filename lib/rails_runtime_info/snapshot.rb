@@ -8,6 +8,7 @@ module RailsRuntimeInfo
     def initialize(env)
       @env = env
       @errors = {}
+      @selection = Selection.new(env["QUERY_STRING"])
     end
 
     def document
@@ -19,13 +20,18 @@ module RailsRuntimeInfo
       section(data, "application") { application }
       section(data, "process") { process_info }
       section(data, "server") { server_info }
-      section(data, "gems") { gem_info(data["application"] && data["application"]["root"]) }
+      section(data, "gems") { gem_info }
       capture(data, "environment") { ENV.to_h }
       capture(data, "loaded_features") { $LOADED_FEATURES.dup }
       capture(data, "load_path") { $LOAD_PATH.dup }
       section(data, "request") { request_info }
       data["errors"] = @errors
-      data
+      @selection.filter!(data)
+      # Collection order and display order are separate: sample GC/YJIT early,
+      # yet keep the most useful human-facing sections at the end of the JSON.
+      Selection::CATEGORIES.each_with_object({}) do |key, ordered|
+        ordered[key] = data[key] if data.key?(key)
+      end
     end
 
     private
@@ -33,6 +39,7 @@ module RailsRuntimeInfo
     # Each independent field has an exception boundary. Normalization is inside
     # that boundary too; no raw exception or request objects escape into JSON.
     def capture(target, key, error_key = key, normalizer_options = {})
+      return unless @selection.requested?(error_key)
       target[key] = Normalizer.new(normalizer_options).call(yield)
     rescue StandardError, LoadError, NotImplementedError => error
       target[key] = nil
@@ -43,6 +50,7 @@ module RailsRuntimeInfo
     # Sections already contain normalized fields. Guard their assembly without
     # making a second deep copy of potentially large snapshots.
     def section(target, key)
+      return unless @selection.requested?(key)
       target[key] = yield
     rescue StandardError, LoadError, NotImplementedError => error
       target[key] = nil
@@ -73,15 +81,13 @@ module RailsRuntimeInfo
 
     def collect_yjit
       result = {}
-      capture(result, "available", "yjit.available") do
-        vm = loaded(Object, :RubyVM)
-        @yjit = vm && loaded(vm, :YJIT)
-        !!@yjit
-      end
-      if @yjit
+      vm = loaded(Object, :RubyVM)
+      yjit = vm && loaded(vm, :YJIT)
+      capture(result, "available", "yjit.available") { !!yjit }
+      if yjit
         { "enabled" => :enabled?, "stats_enabled" => :stats_enabled?, "runtime_stats" => :runtime_stats }.each do |key, method|
-          next unless @yjit.respond_to?(method)
-          capture(result, key, "yjit.#{key}") { @yjit.public_send(method) }
+          next unless yjit.respond_to?(method)
+          capture(result, key, "yjit.#{key}") { yjit.public_send(method) }
         end
       end
       result
@@ -186,10 +192,8 @@ module RailsRuntimeInfo
       capture(result, "program_name", "process.program_name") { $0 }
       capture(result, "argv", "process.argv") { ARGV.dup }
       capture(result, "uname", "process.uname") { require "etc"; Etc.uname }
-      if RUBY_PLATFORM.include?("linux")
-        result["linux"] = linux_info
-      else
-        result["linux"] = { "available" => false }
+      if @selection.requested?("process.linux")
+        result["linux"] = RUBY_PLATFORM.include?("linux") ? linux_info : { "available" => false }
       end
       result
     end
@@ -228,7 +232,7 @@ module RailsRuntimeInfo
       Normalizer.new.call(result)
     end
 
-    def gem_info(root)
+    def gem_info
       result = {}
       capture(result, "activated", "gems.activated") do
         gem_module = loaded(Object, :Gem)
@@ -237,9 +241,6 @@ module RailsRuntimeInfo
             { "name" => spec.name, "version" => spec.version.to_s, "platform" => spec.platform.to_s }
           end.sort_by { |spec| [spec["name"], spec["version"], spec["platform"]] }
         end
-      end
-      capture(result, "locked", "gems.locked") do
-        Lockfile.read(Lockfile.path(root.kind_of?(String) ? root : nil, ENV))
       end
       result
     end
@@ -250,7 +251,7 @@ module RailsRuntimeInfo
       capture(result, "metadata", "request.metadata") { request.metadata }
       capture(result, "headers", "request.headers") { request.headers }
       capture(result, "reconstructed_url", "request.reconstructed_url") { request.reconstructed_url }
-      capture(result, "rack_environment", "request.rack_environment", :omit_request_caches => true) { @env }
+      capture(result, "rack_environment", "request.rack_environment", :request_environment => true) { @env }
       capture(result, "body", "request.body") { request.body }
       result
     end

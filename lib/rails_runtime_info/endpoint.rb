@@ -7,7 +7,7 @@ module RailsRuntimeInfo
     def self.call(env)
       status = 200
       begin
-        json = serialized_snapshot(env)
+        status, json = serialized_response(env)
       rescue StandardError, LoadError, NotImplementedError
         # Do not invoke application logging, exception formatting, or JSON again
         # on this last-resort path. Fatal exceptions deliberately propagate.
@@ -25,10 +25,24 @@ module RailsRuntimeInfo
       [status, headers, Body.new(head ? nil : json)]
     end
 
-    def self.serialized_snapshot(env)
+    def self.serialized_response(env)
       require "json"
-      JSON.pretty_generate(Snapshot.new(env).document) + "\n"
+      begin
+        document = Snapshot.new(env).document
+        status = 200
+      rescue Selection::Invalid => error
+        # Parse selectors before collecting diagnostics or reading rack.input.
+        # Keep this serialization inside call's last-resort failure boundary.
+        status = 400
+        document = {
+          "error" => "invalid_what",
+          "message" => error.message,
+          "default_what" => Selection::DEFAULT,
+          "categories" => Selection::CATEGORIES
+        }
+      end
+      [status, JSON.pretty_generate(document) + "\n"]
     end
-    private_class_method :serialized_snapshot
+    private_class_method :serialized_response
   end
 end

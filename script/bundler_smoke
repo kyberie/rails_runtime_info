@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Optional: exercise an already-installed Bundler, without Rails, dependency
+# installation, network sources, or changes to the real application's bundle.
+require "tmpdir"
+require "open3"
+require "rbconfig"
+
+root = File.expand_path("..", __dir__)
+%w[automatic explicit].each do |mode|
+  Dir.mktmpdir("rails-runtime-info-bundler-") do |directory|
+    gemfile = File.join(directory, "Gemfile")
+    suffix = mode == "explicit" ? ", require: false" : ""
+    File.write(gemfile, "gem 'rails_runtime_info', path: #{root.inspect}#{suffix}\n")
+    program = <<~'CODE'
+      gem "bundler", ENV["BUNDLER_VERSION"] if ENV["BUNDLER_VERSION"]
+      require "bundler"
+      Bundler.setup
+      abort "setup unexpectedly required the endpoint" if defined?(RailsRuntimeInfo::Endpoint)
+      Bundler.require
+      if ENV.fetch("LOAD_MODE") == "explicit"
+        abort "require: false ignored" if defined?(RailsRuntimeInfo::Endpoint)
+        require "rails_runtime_info"
+      end
+      abort "endpoint not loaded" unless defined?(RailsRuntimeInfo::Endpoint)
+      abort "second require should be a no-op" if require "rails_runtime_info"
+      status, headers, body = RailsRuntimeInfo::Endpoint.call("QUERY_STRING" => "what=-all%2C%2Bgems", "REQUEST_METHOD" => "GET")
+      text = String.new
+      begin
+        body.each { |chunk| text << chunk }
+      ensure
+        body.close
+      end
+      abort "wrong status" unless status == 200
+      abort "wrong length" unless headers["content-length"].to_i == text.bytesize
+      data = JSON.parse(text)
+      abort "wrong categories" unless data.keys == ["gems"]
+      abort "unexpected locked inventory" unless data["gems"].keys == ["activated"]
+      spec = data["gems"]["activated"].find { |entry| entry["name"] == "rails_runtime_info" }
+      abort "gem/version missing" unless spec && spec["version"] == RailsRuntimeInfo::VERSION
+      puts "Bundler #{Bundler::VERSION}: #{ENV.fetch('LOAD_MODE')} loading passed"
+    CODE
+    env = { "BUNDLE_GEMFILE" => gemfile, "RUBYOPT" => nil, "RUBYLIB" => nil, "LOAD_MODE" => mode, "BUNDLE_FROZEN" => "false", "BUNDLE_DEPLOYMENT" => "false" }
+    output, error, status = Open3.capture3(env, RbConfig.ruby, "-e", program, :chdir => directory)
+    $stdout.write(output)
+    $stderr.write(error)
+    abort "Bundler smoke test failed (#{mode})" unless status.success?
+  end
+end
